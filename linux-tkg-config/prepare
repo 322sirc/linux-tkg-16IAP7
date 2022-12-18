@@ -1,16 +1,17 @@
 #!/bin/bash
 
 # List of kernels that are maintained upstream
-_current_kernels=("6.0" "5.19" "5.15" "5.10" "5.4")
+_current_kernels=("6.1" "6.0" "5.15" "5.10" "5.4")
 
 # List of kernels that are no longer maintained upstream
-_eol_kernels=("5.18" "5.17" "5.16" "5.14" "5.13" "5.12" "5.11" "5.9" "5.8" "5.7")
+_eol_kernels=("5.19" "5.18" "5.17" "5.16" "5.14" "5.13" "5.12" "5.11" "5.9" "5.8" "5.7")
 
 typeset -Ag _kernel_git_remotes
 _kernel_git_remotes=(
   ["kernel.org"]="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
   ["googlesource.com"]="https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux-stable"
   ["github.com"]="https://github.com/gregkh/linux.git"
+  ["torvalds"]="https://github.com/torvalds/linux.git"
 )
 
 _git_remote_names=( "${!_kernel_git_remotes[@]}" )
@@ -35,53 +36,35 @@ for _key in "${_current_kernels[@]}" "${_eol_kernels[@]}"; do
   _kver_latest_tags_map[$_key]=$(echo "$_kernel_tags" | grep -F "v$_key" | tail -1 | cut -c1-)
 done
 
-# only used by workflow trigger script
-typeset -Ag _kver_subver_map
-_kver_subver_map=(
-  ["5.4"]="214"
-  ["5.7"]="19"
-  ["5.8"]="18"
-  ["5.9"]="16"
-  ["5.10"]="144"
-  ["5.11"]="22"
-  ["5.12"]="19"
-  ["5.13"]="19"
-  ["5.14"]="21"
-  ["5.15"]="69"
-  ["5.16"]="20"
-  ["5.17"]="15"
-  ["5.18"]="19"
-  ["5.19"]="10"
-  ["6.0"]="rc6"
-)
-
-
-
 # PREEMPT_RT's supported kernel subversion
 typeset -Ag _rt_subver_map
 _rt_subver_map=(
-  ["5.4"]="188"
+  ["5.4"]="209"
   ["5.9"]="1"
-  ["5.10"]="109"
+  ["5.10"]="153"
   ["5.11"]="4"
   ["5.14"]="2"
-  ["5.15"]="32"
+  ["5.15"]="76"
   ["5.16"]="2"
   ["5.17"]="1"
+  ["6.0"]="5"
+  ["6.1"]="rc3"
 )
 
 # PREEMPT_RT's patch revision for the kernel
 # We separated this to allow for forcing the application of the patch when _preempt_rt_force=1 on version mismatch
 typeset -Ag _rt_rev_map
 _rt_rev_map=(
-  ["5.4"]="73"
+  ["5.4"]="77"
   ["5.9"]="20"
-  ["5.10"]="65"
+  ["5.10"]="76"
   ["5.11"]="11"
   ["5.14"]="21"
-  ["5.15"]="39"
+  ["5.15"]="53"
   ["5.16"]="19"
   ["5.17"]="17"
+  ["6.0"]="14"
+  ["6.1"]="2"
 )
 
 _undefine() {
@@ -287,7 +270,7 @@ _set_cpu_scheduler() {
   elif [ "$_kver" = "514" ]; then
     _avail_cpu_scheds=("pds" "bmq" "cacule" "cfs")
   elif [ "$_kver" = "515" ]; then
-    _avail_cpu_scheds=("pds" "bmq" "cacule" "tt" "cfs")
+    _avail_cpu_scheds=("pds" "bmq" "cacule" "tt" "bore" "cfs")
   elif [ "$_kver" = "516" ]; then
     _avail_cpu_scheds=("pds" "bmq" "cacule" "cfs")
   elif [ "$_kver" = "517" ]; then
@@ -297,19 +280,31 @@ _set_cpu_scheduler() {
   elif [ "$_kver" = "519" ]; then
     _avail_cpu_scheds=("cfs" "pds" "bmq" "cacule" "tt" "bore")
   elif [ "$_kver" = "600" ]; then
-    _avail_cpu_scheds=("cfs" "pds" "bmq" "bore")
+    _avail_cpu_scheds=("cfs" "pds" "bmq" "tt" "bore")
+  elif [ "$_kver" = "601" ]; then
+    _avail_cpu_scheds=("cfs" "pds" "bmq" "tt" "bore")
+    _projectc_unoff=1
   else
     _avail_cpu_scheds=("cfs")
   fi
 
   if [ "${_preempt_rt}" = "1" ]; then
-    _avail_cpu_scheds=("cfs")
+    warning "! Since you have enabled _preempt_rt, incompatible cpu schedulers will not be available !"
+    if [[ "${_avail_cpu_scheds[*]}" =~ "bore" ]]; then
+      _avail_cpu_scheds=("cfs" "bore")
+    else
+      _avail_cpu_scheds=("cfs")
+    fi
   fi
 
   # Populate descriptions of the available CPU schedulers
   _avail_cpu_scheds_text=()
   for _sched in "${_avail_cpu_scheds[@]}"; do
-    _avail_cpu_scheds_text+=("${_sched_description_array[$_sched]}")
+    if [ "$_sched" = "pds" ] || [ "$_sched" = "bmq" ] && [ "$_projectc_unoff" = "1" ]; then
+      _avail_cpu_scheds_text+=("Project C / ${_sched^^} (unofficial port - ! possibly unstable !)")
+    else
+      _avail_cpu_scheds_text+=("${_sched_description_array[$_sched]}")
+    fi
   done
 
   if ! [[ ${_avail_cpu_scheds[*]} =~ "$_cpusched" ]]; then
@@ -432,6 +427,7 @@ _linux_git_branch_checkout() {
       msg2 "master branch doesn't locally exist, shallow cloning..."
       git remote set-branches --add kernel.org master
       git remote set-branches --add googlesource.com master
+      git remote set-branches --add torvalds master
       git fetch --depth=1 $_git_mirror master
       git fetch --depth 1 $_git_mirror tag "$_kernel_git_tag"
       git checkout -b master-${_git_mirror} ${_git_mirror}/master
@@ -449,6 +445,7 @@ _linux_git_branch_checkout() {
       msg2 "${_basekernel}.y branch doesn't locally exist, shallow cloning..."
       git remote set-branches --add kernel.org linux-${_basekernel}.y
       git remote set-branches --add googlesource.com linux-${_basekernel}.y
+      git remote set-branches --add torvalds linux-${_basekernel}.y
       git fetch --depth=1 $_git_mirror linux-${_basekernel}.y
       git fetch --depth=1 $_git_mirror tag "$_kernel_git_tag"
       git checkout -b linux-${_basekernel}-${_git_mirror} ${_git_mirror}/linux-${_basekernel}.y
@@ -637,7 +634,7 @@ _tkg_srcprep() {
   fi
 
 
-  wget -O "${_patch_location}/${_patch_name}.patch" "https://raw.githubusercontent.com/graysky2/kernel_compiler_patch/master/${_outdated}${_patch_name}.patch" || true
+  curl "https://raw.githubusercontent.com/graysky2/kernel_compiler_patch/master/${_outdated}${_patch_name}.patch" > "$srcdir"/"${_patch_name}".patch || true
   tkgpatch="${_patch_location}/${_patch_name}.patch"
   if [ -e "$tkgpatch" ]; then
     _msg="Applying graysky's cpu opts patch" && _tkg_patcher
@@ -650,10 +647,15 @@ _tkg_srcprep() {
     if [ ${_rt_subver_map[$_basekernel]+_} = "_" ]; then
       preempt_rt_ksubver="${_rt_subver_map[$_basekernel]}"
       # Check if subversion is supported, skip check if forced
-      if [ "${_preempt_rt_force}" = "1" ] || [ "${preempt_rt_ksubver}" = "${_kver_subver_map[$_basekernel]}" ]; then
-        preempt_rt_file_gz="patch-${_basekernel}.${preempt_rt_ksubver}-rt${_rt_rev_map["$_basekernel"]}.patch.gz"
+      if [ "${_preempt_rt_force}" = "1" ] || [ "${preempt_rt_ksubver}" = "${_sub}" ]; then
+        if [[ "${_sub}" == *rc* ]]; then
+          _separator="-"
+        else
+          _separator="."
+        fi
+        preempt_rt_file_gz="patch-${_basekernel}${_separator}${preempt_rt_ksubver}-rt${_rt_rev_map["$_basekernel"]}.patch.gz"
         preempt_rt_file=`basename ${preempt_rt_file_gz} .gz`
-        wget -P "$srcdir" "https://cdn.kernel.org/pub/linux/kernel/projects/rt/${_basekernel}/${preempt_rt_file_gz}"
+        curl "https://cdn.kernel.org/pub/linux/kernel/projects/rt/${_basekernel}/${preempt_rt_file_gz}" > "$srcdir"/"${preempt_rt_file_gz}"
         last_pwd=`pwd`
         cd "$srcdir"
         gunzip -k "$srcdir/${preempt_rt_file_gz}"
@@ -661,10 +663,10 @@ _tkg_srcprep() {
         tkgpatch="$srcdir/${preempt_rt_file}"
         _msg="Applying PREEMPT_RT patch" && _tkg_patcher
       else
-        msg2 "Skipping PREEMPT_RT patch for ${_basekernel}.${_sub}"
+        warning "Skipping PREEMPT_RT patch for ${_basekernel}.${_sub} (last known good ${_basekernel}.${preempt_rt_ksubver})"
       fi
     else
-      msg2 "Skipping PREEMPT_RT patch on unsupported kernel version"
+      warning "Skipping PREEMPT_RT patch on unsupported kernel version"
     fi
   fi
 
@@ -676,6 +678,11 @@ _tkg_srcprep() {
 
   tkgpatch="$srcdir/0003-glitched-base.patch"
   _msg="Applying glitched base patch" && _tkg_patcher
+
+  if [ "${_preempt_rt}" != "1" ]; then
+    tkgpatch="$srcdir/0003-glitched-base-nonrt.patch"
+    _msg="Applying glitched base non-rt additions patch" && _tkg_patcher
+  fi
 
   if [[ "$_distro" =~ ^(Fedora|Suse)$ ]]; then
     tkgpatch="$srcdir/0013-fedora-rpm.patch"
@@ -705,7 +712,7 @@ _tkg_srcprep() {
   elif [ "$_kver" = "509" ]; then
     rev=3
   elif [ "$_kver" = "510" ]; then
-    rev=3
+    rev=5
   elif [ "$_kver" = "511" ]; then
     rev=3
   elif [ "$_kver" = "512" ]; then
@@ -804,22 +811,10 @@ _tkg_srcprep() {
   elif [ "${_cpusched}" = "tt" ]; then
     _msg="Applying TT patch"
     if [ "${_distro}" = "Void" ]; then
-      if [[ $_kver = 515 ]]; then
-        curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/TT/0001-tt-${_basekernel}.patch" > "$srcdir"/tt.patch
-      elif [[ $_kver = 517 ]] || [[ $_kver = 519 ]]; then
-        curl "https://raw.githubusercontent.com/ptr1337/kernel-patches/master/${_basekernel}/sched/0001-tt.patch" > "$wrksrc"/tt.patch
-      else
-        curl "https://raw.githubusercontent.com/ptr1337/kernel-patches/master/${_basekernel}/sched/0001-tt-${_basekernel}.patch" > "$wrksrc"/tt.patch
-      fi
+      curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/sched/0001-tt.patch" > "$wrksrc"/tt.patch
       tkgpatch="$wrksrc/tt.patch" && _tkg_patcher
     else
-      if [[ $_kver = 515 ]]; then
-         curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/TT/0001-tt-${_basekernel}.patch" > "$srcdir"/tt.patch
-      elif [[ $_kver = 517 ]] || [[ $_kver = 519 ]]; then
-         curl "https://raw.githubusercontent.com/ptr1337/kernel-patches/master/${_basekernel}/sched/0001-tt.patch" > "$srcdir"/tt.patch
-      else
-         curl "https://raw.githubusercontent.com/ptr1337/kernel-patches/master/${_basekernel}/sched/0001-tt-${_basekernel}.patch" > "$srcdir"/tt.patch
-      fi
+      curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/sched/0001-tt.patch" > "$srcdir"/tt.patch
       tkgpatch="$srcdir/tt.patch" && _tkg_patcher
     fi
     if [ "$_tt_high_hz" = "true" ] && [ $_kver = 515 ]; then
@@ -834,14 +829,11 @@ _tkg_srcprep() {
     fi
   elif [ "${_cpusched}" = "bore" ]; then
     _msg="Applying BORE patch"
-    if [ "$_kver" = "518" ]; then
-      _bore_suffix="-sched"
-    fi
     if [ "${_distro}" = "Void" ]; then
-      curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/sched/0001-bore$_bore_suffix.patch" > "$wrksrc"/0001-bore.patch
+      curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/sched/0001-bore.patch" > "$wrksrc"/0001-bore.patch
       tkgpatch="$wrksrc/0001-bore.patch" && _tkg_patcher
     else
-      curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/sched/0001-bore$_bore_suffix.patch" > "$srcdir"/0001-bore.patch
+      curl "https://raw.githubusercontent.com/CachyOS/kernel-patches/master/${_basekernel}/sched/0001-bore.patch" > "$srcdir"/0001-bore.patch
       tkgpatch="$srcdir/0001-bore.patch" && _tkg_patcher
     fi
   elif [ "${_cpusched}" = "cfs" ]; then
@@ -883,7 +875,7 @@ _tkg_srcprep() {
   if [ -z $_debug ]; then
 
   # Set some -tkg defaults
-  _disable "DYNAMIC_FAULT" "DEFAULT_FQ_CODEL"
+  _disable "DYNAMIC_FAULT" "DEFAULT_FQ_CODEL" "WERROR"
   _enable "DEFAULT_CAKE"
   if [ "$_kver" = "504" ]; then
     _module "TP_SMAPI"
@@ -956,10 +948,10 @@ _tkg_srcprep() {
   # cpu opt
   _cpu_marchs=("native_amd" "native_intel" "generic_cpu" "generic_cpu2" "generic_cpu3" "generic_cpu4")
   _cpu_marchs+=("k8" "k8sse3" "k10" "barcelona" "bobcat" "jaguar" "bulldozer" "piledriver")
-  _cpu_marchs+=("steamroller" "excavator" "zen" "zen2" "zen3" "mpsc" "atom" "core2" "nehalem" "westmere")
+  _cpu_marchs+=("steamroller" "excavator" "zen" "zen2" "zen3" "zen4" "mpsc" "atom" "core2" "nehalem" "westmere")
   _cpu_marchs+=("bonnell" "silvermont" "sandybridge" "ivybridge" "haswell" "broadwell" "skylake")
   _cpu_marchs+=("skylakex" "cannonlake" "icelake" "goldmont" "goldmontplus" "cascadelake")
-  _cpu_marchs+=("cooperlake" "tigerlake" "sapphirerapids" "rocketlake" "alderlake")
+  _cpu_marchs+=("cooperlake" "tigerlake" "sapphirerapids" "rocketlake" "alderlake" "raptorlake" "meteorlake")
 
   typeset -A _generic_march_map
   _generic_march_map=(
@@ -1343,7 +1335,7 @@ _tkg_srcprep() {
     plain "Use CattaRappa mode (Tickless/Dynticks) ?"
     _tickless_array_text=(
       "No, use periodic ticks."
-      "Yes, full tickless baby!\n        Can give higher performances in many cases but lower consistency on some hardware."
+      "Yes, full tickless baby!\n       Full tickless can give higher performances in case you use isolation of CPUs for task, in other cases it behaves as Idle."
       "Just tickless idle plz.\n        Just tickless idle can perform better with some platforms (mostly AMD) or CPU schedulers (mostly MuQSS)."
     )
     _default_index="2"
@@ -1614,8 +1606,10 @@ CONFIG_DEBUG_INFO_BTF_MODULES=y\r
   fi
   if [ -n "$_NR_CPUS_value" ]; then
     scripts/config --set-val "NR_CPUS" "$_NR_CPUS_value"
+    _enable "FORCE_NR_CPUS"
   else
     scripts/config --set-val "NR_CPUS" "128"
+    _disable "FORCE_NR_CPUS"
   fi
 
   fi
